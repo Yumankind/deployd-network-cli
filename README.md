@@ -1,8 +1,9 @@
 # deployd-network-cli
 
 The command line for [Deployd Studio](https://deployd.app). Create draft
-websites, check and buy domains, and manage DNS — authenticated with an agency
-API key, scoped to your agency's sites and nothing else.
+websites, check and buy domains, and manage DNS — authenticated with an API
+key from an **agency** or a **Creator Pro** account, scoped to that account's
+own sites and nothing else.
 
 ```bash
 npm install -g deployd-network-cli
@@ -10,15 +11,23 @@ npm install -g deployd-network-cli
 
 ## Sign in
 
-Mint a key in **Settings → API keys**, then:
-
 ```bash
 deployd login
 ```
 
-The key is stored in `~/.deployd/config.json` (mode `0600`), never in an
+opens your browser: confirm the code on screen matches your terminal and
+click **Authorize** (you need an agency or Creator Pro account). The CLI
+receives a **session token that lasts 24 hours and only works from the
+network that requested it** — lifted from your laptop, it is useless
+anywhere else. Session tokens carry the default scopes only.
+
+For CI, or for the sensitive scopes a session deliberately lacks
+(`domains:register`, `dns:write`, `domains:write`), mint a key in
+**Settings → API keys** and either run `deployd login --key` or set
+`DEPLOYD_API_KEY` (it takes precedence).
+
+Credentials are stored in `~/.deployd/config.json` (mode `0600`), never in an
 environment variable — env vars leak into `ps`, CI logs and crash reports.
-For CI, set `DEPLOYD_API_KEY` instead; it takes precedence.
 
 ## Commands
 
@@ -28,6 +37,10 @@ deployd sites                             list your sites
 deployd create "Acme Bakery"              create a draft site
 deployd create "Acme" --dir ./build       …and upload a folder into it
 deployd push --site <id> --dir ./build    upload a folder as a new version
+
+deployd feedback --site <id>              unresolved feedback (comment, page,
+                                          selected elements); --all for history
+deployd feedback resolve <fid> --site <id>  mark feedback handled
 
 deployd domains                           domains you own
 deployd domains check acme.com            availability + price, every registrar

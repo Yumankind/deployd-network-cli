@@ -1,13 +1,13 @@
 ---
 name: deployd-cli
-description: Create, list and publish Deployd Studio websites and register/manage domains from the command line. Use when asked to create a site, check or buy a domain, change DNS records, or transfer a domain for a Deployd agency or Pro account.
+description: Create, list and publish Deployd Studio websites and register/manage domains from the command line, as a Deployd agency or Creator Pro account. Use when asked to create a site, upload/publish a site folder, check or buy a domain, change DNS records, or transfer a domain.
 ---
 
 # Deployd CLI
 
 `deployd` is the command line for Deployd Studio (https://deployd.app). It
-authenticates with an **agency API key** and can only reach that agency's own
-sites and domains.
+authenticates with an **API key** belonging to an agency or a Creator Pro
+account, and can only reach that account's own sites and domains.
 
 ## Install
 
@@ -20,13 +20,17 @@ without installing.
 
 ## Authenticate
 
-Preferred (interactive): `deployd login` — prompts for a key (`dpa_…`, minted
-in Settings → API keys), verifies it against `/api/v1/whoami`, stores it in
-`~/.deployd/config.json` at mode 0600.
+Interactive: `deployd login` — opens the browser for a one-click approval by
+the signed-in user, then stores a **24-hour session token bound to this
+machine's public IP** in `~/.deployd/config.json` (mode 0600). Session tokens
+carry default scopes only; tell the user to mint a key in Settings → API keys
+when they need `domains:register`/`dns:write`/`domains:write`, and store it
+with `deployd login --key`.
 
 Non-interactive (CI, agents): set `DEPLOYD_API_KEY` in the environment. It
 overrides the config file. **Never echo the key or write it to any other
-file.** If there is no key, stop and ask the user for one — do not guess.
+file.** If there is no key, stop and ask the user to run `deployd login` or
+provide one — do not guess.
 
 Check who you are before acting:
 
@@ -43,6 +47,10 @@ deployd create "Acme" --dir ./build        # …and upload a folder into it
 deployd push --site <id> --dir ./build     # upload a folder as a new version
                                            # (a sync; --no-delete keeps
                                            #  remote files absent locally)
+
+deployd feedback --site <id>               # unresolved feedback: comment, page,
+                                           #  selected elements (--all for history)
+deployd feedback resolve <fid> --site <id> # mark feedback handled
 
 deployd domains                            # domains the agency owns
 deployd domains check acme.com             # availability + customer price
@@ -96,7 +104,14 @@ deployd transfer status acme.com
    own. Attach a domain only through `domains buy --site <id>` or
    `transfer in`, both of which prove control.
 
-7. **Uploads are versions.** `push` stages files and then finalizes them into
+7. **Feedback is the edit queue.** `feedback` lists what reviewers left on
+   the preview page — comment, page, and the exact elements they selected
+   (xpath + HTML snippet), which is enough context to make the edit. Errored
+   items stay listed until a person resolves them. Resolve only feedback that
+   has actually been addressed; an `in_progress` item cannot be resolved while
+   the agent is working on it.
+
+8. **Uploads are versions.** `push` stages files and then finalizes them into
    a new version atomically — an interrupted push leaves the previous version
    intact. It syncs: remote files absent from the folder are removed unless
    `--no-delete` is passed.

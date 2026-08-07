@@ -2,7 +2,7 @@
 /**
  * `deployd` — the agency CLI.
  *
- *   deployd login                              store an agency API key
+ *   deployd login                              sign in from the browser (24h, IP-bound)
  *   deployd whoami                             which agency, which scopes, draft quota
  *   deployd sites                              list the agency's sites
  *   deployd create "Acme Bakery"               create a draft, print its preview URL
@@ -47,11 +47,18 @@ function writeConfig(config) {
 }
 
 function apiKey() {
-  const key = process.env.DEPLOYD_API_KEY || readConfig().apiKey
-  if (!key) {
-    fail('Not logged in. Run `deployd login` with a key from Settings → API keys.')
+  if (process.env.DEPLOYD_API_KEY) return process.env.DEPLOYD_API_KEY
+
+  const config = readConfig()
+  if (!config.apiKey) {
+    fail('Not logged in. Run `deployd login` to sign in from the browser.')
   }
-  return key
+  // A browser-approved session carries its expiry; say "session expired"
+  // instead of letting the server's generic 401 look like a broken key.
+  if (config.apiKeyExpiresAt && Date.parse(config.apiKeyExpiresAt) < Date.now()) {
+    fail('Your CLI session expired. Run `deployd login` to sign in again.')
+  }
+  return config.apiKey
 }
 
 function host() {
@@ -97,13 +104,14 @@ function prompt(question, { hidden = false } = {}) {
 
 // ── API ──────────────────────────────────────────────────────────────────────
 
-async function api(method, endpoint, body, { raw = false } = {}) {
+async function api(method, endpoint, body, { raw = false, auth = true } = {}) {
   let response
   try {
     response = await fetch(`${host()}${raw ? '' : '/api/v1'}${endpoint}`, {
       method,
       headers: {
-        Authorization: `Bearer ${apiKey()}`,
+        // The login flow itself runs before any key exists.
+        ...(auth ? { Authorization: `Bearer ${apiKey()}` } : {}),
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -139,14 +147,71 @@ async function api(method, endpoint, body, { raw = false } = {}) {
 
 const commands = {}
 
-commands.login = async () => {
-  const key = await prompt('Agency API key: ', { hidden: true })
-  if (!key) fail('No key entered.')
-  if (!key.startsWith('dpa_')) fail('That does not look like an agency key (they start with dpa_).')
+commands.login = async (args = {}) => {
+  // Two ways in. The default opens the browser and has the signed-in user
+  // approve this machine — the resulting session token lives 24 hours and
+  // only works from this machine's public IP. `--key` is the old way: paste
+  // a dashboard-minted key, which is what you want for CI or for the
+  // sensitive scopes a session token deliberately does not carry.
+  if (args.key) return loginWithPastedKey()
+  return loginViaBrowser()
+}
 
+async function loginWithPastedKey() {
+  const key = await prompt('API key: ', { hidden: true })
+  if (!key) fail('No key entered.')
+  if (!key.startsWith('dpa_')) fail('That does not look like a Deployd API key (they start with dpa_).')
+  return storeVerifiedKey(key, null)
+}
+
+async function loginViaBrowser() {
+  const started = await api('POST', '/api/cli-auth/start', {}, { raw: true, auth: false })
+
+  // The code IS the phishing defence: the person approves only if the browser
+  // shows exactly what the terminal shows. So the terminal shows it first,
+  // unmissably, and the browser opens only when they say so — a page that
+  // pops up before you have seen the code is a comparison nobody makes.
+  const spaced = started.userCode.split('').join(' ')
+  const inner = `      ${spaced}      `
+  const line = '─'.repeat(inner.length)
+  const pad = ' '.repeat(inner.length)
+
+  console.log('\nYour login code — approve it ONLY if the browser shows exactly this:\n')
+  console.log(`  ┌${line}┐`)
+  console.log(`  │${pad}│`)
+  console.log(`  │${'\x1b[1m\x1b[36m'}${inner}${'\x1b[0m'}│`)
+  console.log(`  │${pad}│`)
+  console.log(`  └${line}┘`)
+
+  if (process.stdin.isTTY) {
+    await prompt(dim('\nPress ENTER to open the browser and approve… '))
+  }
+  console.log(dim(`  ${started.verificationUrl}`))
+  openBrowser(started.verificationUrl)
+  process.stdout.write(dim('  Waiting for approval'))
+
+  const deadline = Date.parse(started.expiresAt)
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, (started.interval || 3) * 1000))
+    process.stdout.write(dim('.'))
+
+    const state = await api('POST', '/api/cli-auth/poll', { deviceCode: started.deviceCode }, { raw: true, auth: false })
+    if (state.status === 'pending') continue
+    if (state.status === 'expired') break
+
+    process.stdout.write('\n')
+    console.log(dim(`  Session lasts 24h and only works from this network (${state.boundToIp}).`))
+    return storeVerifiedKey(state.token, state.expiresAt)
+  }
+
+  process.stdout.write('\n')
+  fail('The login request expired before it was approved. Run `deployd login` again.')
+}
+
+async function storeVerifiedKey(key, expiresAt) {
   // Verify before storing, so a typo fails now rather than on the next command.
   const config = readConfig()
-  writeConfig({ ...config, apiKey: key })
+  writeConfig({ ...config, apiKey: key, apiKeyExpiresAt: expiresAt || null })
 
   let me
   try {
@@ -156,9 +221,21 @@ commands.login = async () => {
     throw err
   }
 
-  console.log(`${green('✓')} Signed in to ${bold(me.agency.name)}`)
+  console.log(`${green('✓')} Signed in to ${bold((me.agency || me.account).name)}`)
   console.log(dim(`  key ${me.key.name} · scopes: ${me.key.scopes.join(', ')}`))
+  if (expiresAt) console.log(dim(`  session expires ${new Date(expiresAt).toLocaleString()}`))
   console.log(dim(`  stored in ${CONFIG_FILE}`))
+}
+
+/** Open a URL in the default browser; printing it already happened, so best-effort. */
+function openBrowser(url) {
+  const { spawn } = require('child_process')
+  const command = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'start'
+    : 'xdg-open'
+  try {
+    spawn(command, [url], { stdio: 'ignore', detached: true, shell: process.platform === 'win32' }).unref()
+  } catch { /* the URL is on screen */ }
 }
 
 commands.logout = async () => {
@@ -171,8 +248,11 @@ commands.logout = async () => {
 
 commands.whoami = async () => {
   const me = await api('GET', '/whoami')
-  console.log(`${bold(me.agency.name)} ${dim(`(${me.agency.id})`)}`)
-  console.log(`  plan     ${me.agency.plan} · ${me.agency.status}`)
+  // A key belongs to an agency or to a Pro account; the response says which.
+  const who = me.agency || me.account
+  const kind = me.agency ? '' : dim(' · Pro account')
+  console.log(`${bold(who.name)} ${dim(`(${who.id})`)}${kind}`)
+  console.log(`  plan     ${who.plan} · ${who.status}`)
   console.log(`  drafts   ${me.quota.used}/${me.quota.allowance} used`)
   console.log(`  key      ${me.key.name}`)
   console.log(`  scopes   ${me.key.scopes.join(', ')}`)
@@ -496,6 +576,60 @@ commands['confirm-status'] = async args => {
   console.log(`${state.status}  ${dim(state.description?.summary || '')}`)
 }
 
+/**
+ * Feedback left on the preview/feedback page.
+ *
+ *   deployd feedback --site <id>                unresolved: comment, page, elements
+ *   deployd feedback --site <id> --all          include resolved
+ *   deployd feedback resolve <id…> --site <id>  mark handled
+ *
+ * "Unresolved" includes errored items on purpose — an item the agent failed
+ * on is exactly the one a person needs to see.
+ */
+commands.feedback = async args => {
+  if (!args.site) fail('Pass --site <siteId>.')
+  const action = args._[0]
+
+  if (action === 'resolve') {
+    const ids = args._.slice(1)
+    if (ids.length === 0) fail('Usage: deployd feedback resolve <feedbackId…> --site <id>')
+
+    for (const id of ids) {
+      const result = await api('POST',
+        `/sites/${encodeURIComponent(args.site)}/feedback/${encodeURIComponent(id)}/resolve`)
+      console.log(result.alreadyResolved
+        ? `${dim('·')} ${id} ${dim('was already resolved')}`
+        : `${green('✓')} ${id} resolved`)
+    }
+    return
+  }
+  if (action) fail(`Unknown feedback subcommand "${action}". Try: resolve, or none to list.`)
+
+  const { feedback, unresolved } = await api('GET',
+    `/sites/${encodeURIComponent(args.site)}/feedback${args.all ? '?all=1' : ''}`)
+
+  if (feedback.length === 0) {
+    console.log(args.all ? 'No feedback on this site.' : 'No unresolved feedback. ✨')
+    return
+  }
+
+  for (const item of feedback) {
+    const mark = item.resolved ? green('✓') : yellow('●')
+    const when = item.created ? new Date(item.created).toLocaleString() : ''
+    console.log(`${mark} ${bold(item.id)}  ${dim(`${item.status} · ${when}`)}`)
+    console.log(`  ${item.comment}`)
+    if (item.page) console.log(dim(`  page      ${item.page}`))
+    for (const el of item.selectedElements) {
+      console.log(dim(`  element   <${el.tag || '?'}>  ${el.xpath || ''}`))
+      if (el.htmlPreview) console.log(dim(`            ${el.htmlPreview}`))
+    }
+    if (item.attachments) console.log(dim(`  ${item.attachments} attachment(s)`))
+    if (item.statusMessage) console.log(dim(`  note      ${item.statusMessage}`))
+    console.log('')
+  }
+  console.log(dim(`${unresolved} unresolved · resolve with: deployd feedback resolve <id> --site ${args.site}`))
+}
+
 commands.push = async args => {
   if (!args.site) fail('Pass --site <siteId>. (Create one first: deployd create "Name")')
   if (!args.dir) fail('Pass --dir <folder>.')
@@ -613,7 +747,8 @@ function formatBytes(bytes) {
 commands.help = async () => {
   console.log(`${bold('deployd')} — build and publish websites from the command line
 
-  ${bold('deployd login')}                          store an agency API key
+  ${bold('deployd login')}                          sign in from the browser (24h session)
+      --key                                paste a dashboard-minted API key instead
   ${bold('deployd whoami')}                         agency, scopes and draft quota
   ${bold('deployd sites')}                          list this agency's sites
   ${bold('deployd create')} "Acme Bakery"           create a draft site
@@ -638,6 +773,10 @@ commands.help = async () => {
   ${bold('deployd transfer in')} acme.com --auth-code X   bring a domain here
   ${bold('deployd transfer out')} acme.com            release it to another registrar
   ${bold('deployd transfer status')} acme.com         how an inbound transfer is going
+
+  ${bold('deployd feedback')} --site <id>            unresolved feedback: comment, page, elements
+  ${bold('deployd feedback resolve')} <fid> --site <id>  mark it handled
+      --all                                include resolved items
 
   ${bold('deployd push')} --site <id> --dir ./build upload a folder as a new version
       --dry-run                            show what would change
