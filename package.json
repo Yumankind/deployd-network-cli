@@ -1,0 +1,31 @@
+{
+  "name": "deployd-network-cli",
+  "version": "0.1.0",
+  "description": "CLI for Deployd Studio — create, manage and publish agency websites, and register and manage domains, from the command line.",
+  "bin": {
+    "deployd": "./deployd-cli.js"
+  },
+  "files": [
+    "deployd-cli.js",
+    "README.md",
+    "skills/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "deployd",
+    "website",
+    "agency",
+    "domains",
+    "dns",
+    "cli"
+  ],
+  "homepage": "https://deployd.app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yumankind/deployd-network-cli.git"
+  },
+  "author": "Yumankind",
+  "license": "UNLICENSED"
+}
