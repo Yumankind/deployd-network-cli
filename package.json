@@ -8,6 +8,7 @@
   "files": [
     "deployd-cli.js",
     "README.md",
+    "LICENSE",
     "skills/"
   ],
   "engines": {
@@ -27,5 +28,5 @@
     "url": "git+https://github.com/Yumankind/deployd-network-cli.git"
   },
   "author": "Yumankind",
-  "license": "UNLICENSED"
+  "license": "MIT"
 }
