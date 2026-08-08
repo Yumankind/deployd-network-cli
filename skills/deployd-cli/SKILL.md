@@ -24,10 +24,12 @@ without installing.
 
 Interactive: `deployd login` — opens the browser for a one-click approval by
 the signed-in user, then stores a **24-hour session token bound to this
-machine's public IP** in `~/.deployd/config.json` (mode 0600). Session tokens
-carry default scopes only; tell the user to mint a key in Settings → API keys
-when they need `domains:register`/`dns:write`/`domains:write`, and store it
-with `deployd login --key`.
+machine's public IP** in `~/.deployd/config.json` (mode 0600). Sessions carry
+every scope, including `domains:register` — buying still ends at a Stripe
+checkout the user pays, and DNS/transfers at an emailed confirmation, so the
+scope is not the safety mechanism. For CI or long-lived credentials, mint a
+key in Settings → API keys (scopes chosen at mint time) and store it with
+`deployd login --key`.
 
 Non-interactive (CI, agents): set `DEPLOYD_API_KEY` in the environment. It
 overrides the config file. **Never echo the key or write it to any other

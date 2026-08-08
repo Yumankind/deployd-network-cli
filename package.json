@@ -1,6 +1,6 @@
 {
   "name": "deployd-network-cli",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "CLI for Deployd Studio — create, manage and publish agency websites, and register and manage domains, from the command line.",
   "bin": {
     "deployd": "./deployd-cli.js"

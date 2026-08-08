@@ -20,11 +20,12 @@ opens your browser: confirm the code on screen matches your terminal and
 click **Authorize**. The CLI
 receives a **session token that lasts 24 hours and only works from the
 network that requested it** — lifted from your laptop, it is useless
-anywhere else. Session tokens carry the default scopes only.
+anywhere else. Sessions can do everything, buying domains included: money
+still only moves through a Stripe checkout you pay, and DNS changes through
+an emailed confirmation you click.
 
-For CI, or for the sensitive scopes a session deliberately lacks
-(`domains:register`, `dns:write`, `domains:write`), mint a key in
-**Settings → API keys** and either run `deployd login --key` or set
+For CI, or for a long-lived credential with hand-picked scopes, mint a key
+in **Settings → API keys** and either run `deployd login --key` or set
 `DEPLOYD_API_KEY` (it takes precedence).
 
 Credentials are stored in `~/.deployd/config.json` (mode `0600`), never in an
