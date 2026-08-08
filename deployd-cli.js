@@ -183,11 +183,16 @@ async function loginViaBrowser() {
   console.log(`  │${pad}│`)
   console.log(`  └${line}┘`)
 
+  // The browser opens only for a human at a TTY, and only after ENTER. A
+  // non-interactive run (CI, an agent, a test) gets the URL printed and
+  // nothing else — spawning a browser from a headless process is never what
+  // anyone wanted, and under jest it opened the mocked URL on the
+  // developer's actual desktop.
   if (process.stdin.isTTY) {
     await prompt(dim('\nPress ENTER to open the browser and approve… '))
+    openBrowser(started.verificationUrl)
   }
-  console.log(dim(`  ${started.verificationUrl}`))
-  openBrowser(started.verificationUrl)
+  console.log(dim(`  Approve here: ${started.verificationUrl}`))
   process.stdout.write(dim('  Waiting for approval'))
 
   const deadline = Date.parse(started.expiresAt)
