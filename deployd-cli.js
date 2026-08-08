@@ -10,7 +10,8 @@
  *   deployd domains check acme.com             availability and price, every registrar
  *   deployd domains buy acme.com --site <id>   register it
  *   deployd domains                            domains this agency owns
- *   deployd push --site <id> --dir ./build     upload a folder as a new version
+ *   deployd pull --site <id> --dir ./site      download a site's content
+ *   deployd push --site <id> --dir ./site       upload a folder as a new version
  *
  * Unlike `scripts/upload-site.js`, which runs on platform admin credentials and
  * is ours alone, this authenticates with an agency API key over the public API.
@@ -189,7 +190,7 @@ async function loginViaBrowser() {
   // anyone wanted, and under jest it opened the mocked URL on the
   // developer's actual desktop.
   if (process.stdin.isTTY) {
-    await prompt(dim('\nPress ENTER to open the browser and approve… '))
+    await prompt('\nPress ENTER to open the browser and approve… ')
     openBrowser(started.verificationUrl)
   }
   console.log(dim(`  Approve here: ${started.verificationUrl}`))
@@ -309,6 +310,75 @@ commands.create = async args => {
   console.log(dim(`\nNext: deployd push --site ${site.siteId} --dir ./your-folder`))
 }
 
+/**
+ * The parts a price is made of, appended to the price itself.
+ *
+ * Shown because a customer who can see registrar cost and management fee
+ * separately does not have to take the total on faith. Guarded rather than
+ * assumed: this CLI is published as its own npm package and may be talking to
+ * a server older than itself.
+ */
+function priceBreakdown(p) {
+  if (typeof p.registrarCost !== 'number' || typeof p.managementFee !== 'number') return ''
+  return dim(`  (= registrar ${p.registrarCost.toFixed(2)} + management ${p.managementFee.toFixed(2)})`)
+}
+
+/**
+ * The VAT line, or nothing outside the EU.
+ *
+ * An estimate, and deliberately shown as an addition rather than folded into
+ * the price: Stripe Tax computes the real rate at checkout from the customer's
+ * own details, and only the net price is ever charged.
+ */
+function vatLine(p) {
+  if (!(p.vatRate > 0)) return null
+  const where = p.countryCode ? ` in ${p.countryCode}` : ''
+  return dim(`  + VAT ${p.vatRate}%${where} → ${p.currency} ${p.grossPrice.toFixed(2)}/year total`)
+}
+
+/**
+ * The `--owner-*` flags, as the API's `registrant` object.
+ *
+ * Every field is optional and nothing is invented locally: a flag that was not
+ * passed is simply absent, so the server fills it in — the email from the
+ * account the key belongs to, the rest from the Deployd company contact. The
+ * CLI cannot resolve either of those, and guessing at them here would put a
+ * wrong address on a domain rather than no address.
+ *
+ * Returns undefined when no flag was passed at all, so the request body has no
+ * `registrant` key rather than an empty object.
+ */
+function registrantFrom(args) {
+  const FLAGS = {
+    'owner-email': 'email', 'owner-name': 'name', 'owner-org': 'org',
+    'owner-phone': 'phone', 'owner-address': 'address', 'owner-city': 'city',
+    'owner-zip': 'zip', 'owner-country': 'country', 'owner-state': 'state',
+  }
+
+  const registrant = {}
+  for (const [flag, field] of Object.entries(FLAGS)) {
+    // `--owner-name` with no value parses as `true`; a boolean is a typo, not
+    // a name, and sending it would fail server-side validation anyway.
+    if (typeof args[flag] === 'string' && args[flag].trim()) registrant[field] = args[flag].trim()
+  }
+
+  return Object.keys(registrant).length > 0 ? registrant : undefined
+}
+
+/** What the pre-buy summary says about who the domain will be registered to. */
+function registrantSummary(registrant) {
+  if (!registrant) return 'your account email (rest: Deployd company contact)'
+
+  const named = Object.entries(registrant)
+    .filter(([field]) => field !== 'email')
+    .map(([field, value]) => `${field} ${value}`)
+
+  const email = registrant.email || 'your account email'
+  return named.length > 0
+    ? `${email} · ${named.join(', ')}`
+    : `${email} (rest: Deployd company contact)`
+}
+
 commands.domains = async args => {
   const sub = args._[0]
 
@@ -331,7 +401,11 @@ commands.domains = async args => {
     const domain = args._[1]
     if (!domain) fail('Usage: deployd domains check example.com')
 
-    const result = await api('GET', `/domains/check?domain=${encodeURIComponent(domain)}`)
+    // `--country` only affects what is *shown*: Stripe Tax decides the VAT
+    // actually charged at checkout, from the customer's own details.
+    const query = `domain=${encodeURIComponent(domain)}` +
+      (args.country ? `&countryCode=${encodeURIComponent(args.country)}` : '')
+    const result = await api('GET', `/domains/check?${query}`)
 
     if (result.available === false) {
       console.log(`${red('✗')} ${bold(result.domain)} is taken`)
@@ -343,15 +417,14 @@ commands.domains = async args => {
       console.log(`${green('✓')} ${bold(result.domain)} is available`)
     }
 
-    // The price. Registrar costs are shown dimmed underneath because they are
-    // ours, not the customer's — quoting a registrar's number as the price is
-    // how someone ends up expecting to pay it.
+    // The price, in full: what the registrar charges, what we charge to manage
+    // it, and the VAT estimate on top. The per-registrar costs underneath are
+    // the same numbers a customer can look up themselves.
     if (result.pricing) {
       const p = result.pricing
-      console.log(`  ${bold(`${p.currency} ${p.netPrice.toFixed(2)}`)}/year`)
-      if (p.vatRate > 0) {
-        console.log(dim(`  ${p.currency} ${p.grossPrice.toFixed(2)} incl. ${p.vatRate}% VAT`))
-      }
+      console.log(`  ${bold(`${p.currency} ${p.netPrice.toFixed(2)}`)}/year${priceBreakdown(p)}`)
+      const vat = vatLine(p)
+      if (vat) console.log(vat)
     } else if (result.premiumOnly) {
       console.log(`  ${red('premium domain')} ${dim('— needs a manual quote')}`)
     }
@@ -384,16 +457,30 @@ commands.domains = async args => {
 
   if (sub === 'buy') {
     const domain = args._[1]
-    if (!domain) fail('Usage: deployd domains buy example.com [--site <siteId>] [--provider namesilo]')
+    if (!domain) {
+      fail('Usage: deployd domains buy example.com [--site <siteId>] [--years <n>]\n' +
+        '       optional registrant: --owner-email --owner-name --owner-org --owner-phone\n' +
+        '                            --owner-address --owner-city --owner-zip --owner-state\n' +
+        '                            --owner-country <ISO2>')
+    }
 
-    const quote = await api('GET', `/domains/check?domain=${encodeURIComponent(domain)}`)
+    const quote = await api('GET', `/domains/check?domain=${encodeURIComponent(domain)}` +
+      (args.country ? `&countryCode=${encodeURIComponent(args.country)}` : ''))
     if (quote.available === false) fail(`${domain} is already taken.`)
     if (!quote.best) fail(`No registrar can sell ${domain} right now.`)
 
     const p = quote.pricing
-    console.log(`${bold(quote.domain)} — ${bold(`${p.currency} ${p.netPrice.toFixed(2)}`)}/year`)
-    if (p.vatRate > 0) console.log(dim(`  ${p.currency} ${p.grossPrice.toFixed(2)} incl. ${p.vatRate}% VAT`))
+    console.log(`${bold(quote.domain)} — ${bold(`${p.currency} ${p.netPrice.toFixed(2)}`)}/year${priceBreakdown(p)}`)
+    const vat = vatLine(p)
+    if (vat) console.log(vat)
     console.log(dim(`  registered via ${quote.best.provider}`))
+
+    // Whose details go on the domain, before the money moves. A WHOIS record
+    // is public and a registrant is who a registry believes owns the name, so
+    // "who is this being bought for" belongs in the confirmation rather than
+    // being discovered afterwards.
+    const registrant = registrantFrom(args)
+    console.log(dim(`  registrant: ${registrantSummary(registrant)}`))
 
     const answer = await prompt('Register it? [y/N] ')
     if (!/^y(es)?$/i.test(answer)) {
@@ -405,6 +492,7 @@ commands.domains = async args => {
       domain,
       siteId: args.site || null,
       years: args.years ? Number(args.years) : 1,
+      ...(registrant ? { registrant } : {}),
     })
 
     // Nothing is bought yet. Saying "registered" here would be wrong, and the
@@ -635,6 +723,67 @@ commands.feedback = async args => {
   console.log(dim(`${unresolved} unresolved · resolve with: deployd feedback resolve <id> --site ${args.site}`))
 }
 
+/**
+ * Download a site's content, to edit locally and push back.
+ *
+ *   deployd pull --site <id> --dir ./folder
+ *
+ * A sync in the other direction: remote files land in the folder, files the
+ * CLI already has bit-identical (same sha256) are skipped. Local files that
+ * do not exist remotely are left alone — pull never deletes your work.
+ */
+commands.pull = async args => {
+  if (!args.site) fail('Pass --site <siteId>.')
+  if (!args.dir) fail('Pass --dir <folder>.')
+
+  const root = path.resolve(args.dir)
+  fs.mkdirSync(root, { recursive: true })
+
+  const { files } = await api('GET', `/sites/${encodeURIComponent(args.site)}/files`)
+  if (files.length === 0) {
+    console.log('This site has no files yet. Build locally and `deployd push`.')
+    return
+  }
+
+  // Skip what is already here, byte for byte.
+  const crypto = require('crypto')
+  const wanted = files.filter(file => {
+    const local = path.join(root, file.path)
+    if (!fs.existsSync(local)) return true
+    if (!file.hash) return true
+    const localHash = crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex')
+    return localHash !== file.hash
+  })
+
+  console.log(`Pulling ${bold(String(wanted.length))} of ${files.length} file(s) → ${root}`)
+  if (args['dry-run']) {
+    for (const f of wanted) console.log(`  ${dim('would fetch')} ${f.path}`)
+    if (wanted.length === 0) console.log(dim('  Everything is already up to date.'))
+    console.log(dim('\n--dry-run: nothing written.'))
+    return
+  }
+
+  const BATCH = 50
+  let done = 0
+  for (let i = 0; i < wanted.length; i += BATCH) {
+    const slice = wanted.slice(i, i + BATCH).map(f => f.path)
+    const batch = await api('POST', `/sites/${encodeURIComponent(args.site)}/files/download`, { paths: slice })
+
+    for (const file of batch.files) {
+      const local = path.join(root, file.path)
+      fs.mkdirSync(path.dirname(local), { recursive: true })
+      fs.writeFileSync(local, Buffer.from(file.content, 'base64'))
+      done++
+    }
+    process.stdout.write(`\r  ${done}/${wanted.length} downloaded`)
+  }
+  if (wanted.length > 0) process.stdout.write('\n')
+  else console.log(dim('  Everything was already up to date.'))
+
+  console.log(`${green('✓')} Pulled into ${root}`)
+  console.log(dim(`  Edit, then: deployd push --site ${args.site} --dir ${args.dir}`))
+}
+
 commands.push = async args => {
   if (!args.site) fail('Pass --site <siteId>. (Create one first: deployd create "Name")')
   if (!args.dir) fail('Pass --dir <folder>.')
@@ -761,9 +910,19 @@ commands.help = async () => {
 
   ${bold('deployd domains')}                        domains this agency owns
   ${bold('deployd domains check')} acme.com         availability and price
+      --country PT                         show the VAT estimate for a country
   ${bold('deployd domains buy')} acme.com           buy it (pay, then it registers)
       --site <siteId>                      attach it to a site
       --years <n>                          registration term
+      --owner-email a@b.com                registrant contact. All optional:
+      --owner-name "Acme Ltd"              what you leave out is filled in with
+      --owner-org "Acme Ltd"               your account email and the Deployd
+      --owner-phone +351.912345678         company contact
+      --owner-address "1 Rua Alta"
+      --owner-city Lisboa
+      --owner-zip 1000-001
+      --owner-state Lisboa
+      --owner-country PT                   two-letter ISO code
   ${bold('deployd domains status')} <purchaseId>  how a purchase is going
 
   ${bold('deployd dns')} acme.com                    list DNS records
@@ -783,7 +942,8 @@ commands.help = async () => {
   ${bold('deployd feedback resolve')} <fid> --site <id>  mark it handled
       --all                                include resolved items
 
-  ${bold('deployd push')} --site <id> --dir ./build upload a folder as a new version
+  ${bold('deployd pull')} --site <id> --dir ./site  download the site's content
+  ${bold('deployd push')} --site <id> --dir ./site  upload a folder as a new version
       --dry-run                            show what would change
       --no-delete                          keep remote files not present locally
 

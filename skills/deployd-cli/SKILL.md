@@ -48,7 +48,10 @@ deployd whoami        # agency name, key scopes, draft quota
 deployd sites                              # list the agency's sites
 deployd create "Acme Bakery"               # create a draft site
 deployd create "Acme" --dir ./build        # …and upload a folder into it
-deployd push --site <id> --dir ./build     # upload a folder as a new version
+deployd pull --site <id> --dir ./site      # download the site's content
+                                           #  (skips identical files, never
+                                           #   deletes local ones)
+deployd push --site <id> --dir ./site      # upload a folder as a new version
                                            # (a sync; --no-delete keeps
                                            #  remote files absent locally)
 
@@ -58,7 +61,14 @@ deployd feedback resolve <fid> --site <id> # mark feedback handled
 
 deployd domains                            # domains the agency owns
 deployd domains check acme.com             # availability + customer price
+                                           #  (--country PT adds a VAT estimate)
 deployd domains buy acme.com --site <id>   # buy (returns a payment link)
+                                           # optional registrant, all optional:
+                                           #  --owner-email --owner-name
+                                           #  --owner-org --owner-phone
+                                           #  --owner-address --owner-city
+                                           #  --owner-zip --owner-state
+                                           #  --owner-country <ISO2>
 deployd domains status <purchaseId>        # purchase progress
 
 deployd dns acme.com                       # list DNS records
@@ -81,7 +91,14 @@ deployd transfer status acme.com
    pending payment*, give the link, and check with `domains status`. If
    registration fails after payment, the refund is automatic.
 
-2. **DNS changes and transfers-out are NOT live when the command returns.**
+2. **The registrant is optional, and never invented locally.** The `--owner-*`
+   flags name who the domain is registered to — a public WHOIS record. Pass
+   only what the user actually told you; anything omitted is filled in
+   server-side with the account's own email and the Deployd company contact.
+   Never guess an address or a phone number to fill a flag. `domains buy`
+   prints the registrant it will use before the confirmation prompt.
+
+3. **DNS changes and transfers-out are NOT live when the command returns.**
    They apply only after someone clicks an emailed confirmation showing the
    exact change. The email goes to an address already registered on the domain
    (the customer, or the agency that manages them) — `--confirm-to <email>`
@@ -89,37 +106,43 @@ deployd transfer status acme.com
    user a DNS change or transfer is done until it is confirmed (`--wait`, or
    `deployd confirm-status <id>`).
 
-3. **Quote customer prices only.** `domains check` output already includes the
-   platform margin and VAT where applicable. Never quote a registrar's raw
-   cost.
+4. **Quote the total, not a part of it.** `domains check` prints the customer
+   price itemised — the cheapest registrar's cost plus a flat management fee,
+   with a VAT estimate on top for EU countries (`--country PT`). Explaining
+   that breakdown is fine; quoting the registrar cost as the price is not.
 
-4. **Scopes are explicit.** A key without `domains:register`, `dns:write` or
+5. **Scopes are explicit.** A key without `domains:register`, `dns:write` or
    `domains:write` cannot do those things — that is deliberate, because they
    spend money or can take a site offline. On an `insufficient_scope` error,
    tell the user to mint a key with that scope in Settings → API keys; do not
    hunt for workarounds.
 
-5. **Draft quota.** Every account has a draft-site allowance — free: one,
+6. **Draft quota.** Every account has a draft-site allowance — free: one,
    Creator Pro: five, agencies: 25 plus purchasable packs of 10. `create`
    fails with the numbers when it is spent; publishing a draft frees its
    slot.
 
-6. **A domain is never "claimed".** `create` takes no domain, deliberately —
+7. **A domain is never "claimed".** `create` takes no domain, deliberately —
    an unverified domain on a site would be a claim on a name someone else may
    own. Attach a domain only through `domains buy --site <id>` or
    `transfer in`, both of which prove control.
 
-7. **Feedback is the edit queue.** `feedback` lists what reviewers left on
+8. **Feedback is the edit queue.** `feedback` lists what reviewers left on
    the preview page — comment, page, and the exact elements they selected
    (xpath + HTML snippet), which is enough context to make the edit. Errored
    items stay listed until a person resolves them. Resolve only feedback that
    has actually been addressed; an `in_progress` item cannot be resolved while
    the agent is working on it.
 
-8. **Uploads are versions.** `push` stages files and then finalizes them into
+9. **Uploads are versions.** `push` stages files and then finalizes them into
    a new version atomically — an interrupted push leaves the previous version
    intact. It syncs: remote files absent from the folder are removed unless
    `--no-delete` is passed.
+
+10. **To update an existing site, pull it first.** `pull` then edit then
+   `push` is the update loop. Pushing a folder that was never pulled
+   replaces the site's content with the folder (push syncs) — only do that
+   deliberately.
 
 ## Errors worth recognising
 

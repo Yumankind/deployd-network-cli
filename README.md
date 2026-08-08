@@ -38,7 +38,8 @@ deployd whoami                            agency, key scopes, draft quota
 deployd sites                             list your sites
 deployd create "Acme Bakery"              create a draft site
 deployd create "Acme" --dir ./build       …and upload a folder into it
-deployd push --site <id> --dir ./build    upload a folder as a new version
+deployd pull --site <id> --dir ./site     download the site's content
+deployd push --site <id> --dir ./site     upload a folder as a new version
 
 deployd feedback --site <id>              unresolved feedback (comment, page,
                                           selected elements); --all for history
@@ -46,7 +47,12 @@ deployd feedback resolve <fid> --site <id>  mark feedback handled
 
 deployd domains                           domains you own
 deployd domains check acme.com            availability + price, every registrar
+       --country PT                       …with a VAT estimate for that country
 deployd domains buy acme.com --site ID    buy it (pay first, registered after)
+       --owner-email a@b.com              registrant contact — all optional
+       --owner-name/-org/-phone
+       --owner-address/-city/-zip/-state
+       --owner-country PT                 two-letter ISO code
 deployd domains status <purchaseId>       how a purchase is going
 
 deployd dns acme.com                      list DNS records
@@ -60,6 +66,12 @@ deployd transfer status acme.com             inbound transfer progress
 
 deployd help                              everything else
 ```
+
+## Round-tripping a site
+
+`pull` downloads a site you own into a folder (skipping files you already
+have bit-identical, never deleting local files); edit; `push` uploads it
+back as a new version. Pull → edit → push is the whole update loop.
 
 ## Uploading
 
@@ -76,7 +88,17 @@ you control it.
 **Buying is payment-first.** `domains buy` returns a Stripe checkout link; the
 domain is registered only after the payment clears, and refunded automatically
 if registration then fails. The price shown by `domains check` is the price
-charged.
+charged, and it is itemised: the cheapest registrar's cost plus a flat
+management fee, with VAT added at checkout for EU customers.
+
+The `--owner-*` flags name the **registrant** — who the registry believes owns
+the domain, and what appears in a public WHOIS record. Every one is optional.
+Whatever you leave out is filled in server-side: the email from the account the
+key belongs to, everything else from the Deployd company contact. `domains buy`
+prints the registrant it will use before asking you to confirm. Cloudflare
+Registrar is the exception — it registers against its account's own contact and
+has no way to take a per-domain one, so a purchase that must carry the
+customer's own details is fulfilled by another registrar.
 
 **Sensitive changes are email-confirmed.** DNS changes and outbound transfers
 do not apply when the command runs. A confirmation email — showing exactly
