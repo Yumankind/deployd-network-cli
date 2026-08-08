@@ -1,6 +1,6 @@
 ---
 name: deployd-cli
-description: Create, list and publish Deployd Studio websites and register/manage domains from the command line, with any Deployd account (agency, Creator Pro or free). Use when asked to create a site, upload/publish a site folder, check or buy a domain, change DNS records, or transfer a domain.
+description: Create, list and publish Deployd Studio websites and register/manage domains from the command line, with any Deployd account (agency, Creator Pro or free). Use when asked to create a site, upload/publish a site folder, check or buy a domain, set up or cancel a domain's yearly renewal, change DNS records, or transfer a domain.
 ---
 
 # Deployd CLI
@@ -70,6 +70,8 @@ deployd domains buy acme.com --site <id>   # buy (returns a payment link)
                                            #  --owner-zip --owner-state
                                            #  --owner-country <ISO2>
 deployd domains status <purchaseId>        # purchase progress
+deployd domains subscribe acme.com         # renew it yearly, on a card
+deployd domains subscribe acme.com --cancel  # stop renewing automatically
 
 deployd dns acme.com                       # list DNS records
 deployd dns acme.com add A www 1.2.3.4     # add a record
@@ -91,14 +93,26 @@ deployd transfer status acme.com
    pending payment*, give the link, and check with `domains status`. If
    registration fails after payment, the refund is automatic.
 
-2. **The registrant is optional, and never invented locally.** The `--owner-*`
+2. **Renewing is payment-first as well — including a subscription.** No domain
+   renews on Deployd's card. `domains subscribe` returns a Stripe checkout URL
+   and sets up a yearly charge landing about a month before expiry; the domain
+   is renewed at the registrar only when that invoice is paid. Until the
+   checkout is completed nothing has changed, so never tell the user the
+   domain is "safe" or "on auto-renew" after running the command — say the
+   subscription is set up *pending payment* and give the link. The price is
+   re-quoted from the registrar before each renewal and the user is emailed
+   both figures if it moved, so do not promise a fixed price for life.
+   `--cancel` stops future renewals; the year already paid for is not refunded
+   and the domain stays registered until it expires.
+
+3. **The registrant is optional, and never invented locally.** The `--owner-*`
    flags name who the domain is registered to — a public WHOIS record. Pass
    only what the user actually told you; anything omitted is filled in
    server-side with the account's own email and the Deployd company contact.
    Never guess an address or a phone number to fill a flag. `domains buy`
    prints the registrant it will use before the confirmation prompt.
 
-3. **DNS changes and transfers-out are NOT live when the command returns.**
+4. **DNS changes and transfers-out are NOT live when the command returns.**
    They apply only after someone clicks an emailed confirmation showing the
    exact change. The email goes to an address already registered on the domain
    (the customer, or the agency that manages them) — `--confirm-to <email>`
@@ -106,40 +120,40 @@ deployd transfer status acme.com
    user a DNS change or transfer is done until it is confirmed (`--wait`, or
    `deployd confirm-status <id>`).
 
-4. **Quote the total, not a part of it.** `domains check` prints the customer
+5. **Quote the total, not a part of it.** `domains check` prints the customer
    price itemised — the cheapest registrar's cost plus a flat management fee,
    with a VAT estimate on top for EU countries (`--country PT`). Explaining
    that breakdown is fine; quoting the registrar cost as the price is not.
 
-5. **Scopes are explicit.** A key without `domains:register`, `dns:write` or
+6. **Scopes are explicit.** A key without `domains:register`, `dns:write` or
    `domains:write` cannot do those things — that is deliberate, because they
    spend money or can take a site offline. On an `insufficient_scope` error,
    tell the user to mint a key with that scope in Settings → API keys; do not
    hunt for workarounds.
 
-6. **Draft quota.** Every account has a draft-site allowance — free: one,
+7. **Draft quota.** Every account has a draft-site allowance — free: one,
    Creator Pro: five, agencies: 25 plus purchasable packs of 10. `create`
    fails with the numbers when it is spent; publishing a draft frees its
    slot.
 
-7. **A domain is never "claimed".** `create` takes no domain, deliberately —
+8. **A domain is never "claimed".** `create` takes no domain, deliberately —
    an unverified domain on a site would be a claim on a name someone else may
    own. Attach a domain only through `domains buy --site <id>` or
    `transfer in`, both of which prove control.
 
-8. **Feedback is the edit queue.** `feedback` lists what reviewers left on
+9. **Feedback is the edit queue.** `feedback` lists what reviewers left on
    the preview page — comment, page, and the exact elements they selected
    (xpath + HTML snippet), which is enough context to make the edit. Errored
    items stay listed until a person resolves them. Resolve only feedback that
    has actually been addressed; an `in_progress` item cannot be resolved while
    the agent is working on it.
 
-9. **Uploads are versions.** `push` stages files and then finalizes them into
+10. **Uploads are versions.** `push` stages files and then finalizes them into
    a new version atomically — an interrupted push leaves the previous version
    intact. It syncs: remote files absent from the folder are removed unless
    `--no-delete` is passed.
 
-10. **To update an existing site, pull it first.** `pull` then edit then
+11. **To update an existing site, pull it first.** `pull` then edit then
    `push` is the update loop. Pushing a folder that was never pulled
    replaces the site's content with the folder (push syncs) — only do that
    deliberately.

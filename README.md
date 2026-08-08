@@ -102,6 +102,15 @@ Registrar is the exception — it registers against its account's own contact an
 has no way to take a per-domain one, so a purchase that must carry the
 customer's own details is fulfilled by another registrar.
 
+**Renewal is payment-first too, subscription or not.** A domain never renews on
+our card. `domains subscribe` sets up a yearly charge that lands about a month
+before the domain expires — enough room for a declined card to be replaced —
+and the domain is renewed at the registrar only once that invoice is paid. The
+price is re-quoted from the registrar before every renewal, because registry
+prices move; if it has changed you are emailed both the old and the new figure
+before the charge. Nothing renews until the checkout link is paid, so a
+`subscribe` you did not finish leaves the domain exactly where it was.
+
 **Sensitive changes are email-confirmed.** DNS changes and outbound transfers
 do not apply when the command runs. A confirmation email — showing exactly
 what will change — goes to an address already registered on the domain (the
