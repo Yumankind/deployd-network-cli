@@ -54,6 +54,8 @@ deployd domains buy acme.com --site ID    buy it (pay first, registered after)
        --owner-address/-city/-zip/-state
        --owner-country PT                 two-letter ISO code
 deployd domains status <purchaseId>       how a purchase is going
+deployd domains subscribe acme.com        renew it yearly, on a card
+       --cancel                           stop renewing it automatically
 
 deployd dns acme.com                      list DNS records
 deployd dns acme.com add A www 1.2.3.4    add a record       (email-confirmed)
@@ -83,7 +85,7 @@ Dotfiles and `node_modules` are never uploaded. There is no way to "claim" a
 domain at creation — attach one by buying or transferring it in, which proves
 you control it.
 
-## Two things worth knowing
+## Three things worth knowing
 
 **Buying is payment-first.** `domains buy` returns a Stripe checkout link; the
 domain is registered only after the payment clears, and refunded automatically

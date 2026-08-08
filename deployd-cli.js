@@ -32,6 +32,9 @@ const CONFIG_DIR = path.join(os.homedir(), '.deployd')
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json')
 const DEFAULT_HOST = process.env.DEPLOYD_HOST || 'https://deployd.app'
 
+/** Written while a pull is in flight; its presence means the folder is partial. */
+const PULL_MARKER = '.deployd-pull-incomplete'
+
 // ── Config ───────────────────────────────────────────────────────────────────
 
 function readConfig() {
@@ -392,7 +395,10 @@ commands.domains = async args => {
       const provider = d.provider === 'external' ? `external${d.external_registrar ? ` (${d.external_registrar})` : ''}` : d.provider
       const price = d.price != null ? ` · ${d.currency || 'USD'} ${Number(d.price).toFixed(2)}/yr` : ''
       const expiry = d.expiresAt ? ` · expires ${String(d.expiresAt).slice(0, 10)}` : ''
-      console.log(`${bold(d.domain)}  ${dim(`${d.status} · ${provider}${price}${expiry}`)}`)
+      // Worth its own colour: every other domain in this list renews only if
+      // somebody pays a one-off checkout before that date.
+      const renews = d.subscribed ? green(' · renews yearly') : ''
+      console.log(`${bold(d.domain)}  ${dim(`${d.status} · ${provider}${price}${expiry}`)}${renews}`)
     }
     return
   }
@@ -506,7 +512,47 @@ commands.domains = async args => {
     return
   }
 
-  fail(`Unknown subcommand "${sub}". Try: check, buy, or no argument to list.`)
+  /**
+   * Renew this domain every year, on a card, instead of by hand.
+   *
+   * The wording below is load-bearing. A subscription does not renew anything
+   * the moment it is set up — it authorises the invoice that will, roughly a
+   * month before the domain expires. Someone who reads "subscribed" as "safe"
+   * and abandons the checkout has a domain that still lapses.
+   */
+  if (sub === 'subscribe') {
+    const domain = args._[1]
+    if (!domain) fail('Usage: deployd domains subscribe example.com [--cancel]')
+
+    if (args.cancel) {
+      console.log(`This stops ${bold(domain)} renewing automatically.`)
+      const answer = await prompt('Cancel the subscription? [y/N] ')
+      if (!/^y(es)?$/i.test(answer)) { console.log('Aborted.'); return }
+
+      const result = await api('DELETE', `/domains/${encodeURIComponent(domain)}/subscribe`)
+      console.log(`${yellow('!')} ${bold(result.domain)} will not renew automatically`)
+      if (result.renewsUntil) {
+        console.log(dim(`  It stays registered until ${String(result.renewsUntil).slice(0, 10)}.`))
+      }
+      console.log(dim('  You will be warned before it expires, and can renew it then.'))
+      return
+    }
+
+    const subscription = await api('POST', `/domains/${encodeURIComponent(domain)}/subscribe`, {
+      ...(args.country ? { countryCode: String(args.country).toUpperCase() } : {}),
+    })
+
+    console.log(`${yellow('!')} ${bold(subscription.domain)} — yearly renewal set up, pending payment`)
+    console.log(`  price   ${subscription.currency} ${Number(subscription.price).toFixed(2)}/year${subscription.vatRate ? dim(` + ${subscription.vatRate}% VAT`) : ''}`)
+    console.log(`  pay     ${subscription.checkoutUrl}`)
+    console.log(dim(`  first charge ${String(subscription.firstInvoiceAt).slice(0, 10)}${subscription.chargesImmediately ? ' (now — the domain expires soon)' : ''}`))
+    console.log(dim('\n  Nothing is renewed until the first invoice is paid. Until the checkout above is'))
+    console.log(dim('  completed, this domain renews only if someone pays for it by hand.'))
+    console.log(dim('  The price is re-quoted before each renewal; you are emailed if it changes.'))
+    return
+  }
+
+  fail(`Unknown subcommand "${sub}". Try: check, buy, subscribe, or no argument to list.`)
 }
 
 /**
@@ -601,18 +647,42 @@ commands.transfer = async args => {
     const authCode = args['auth-code'] || args.authCode
     if (!authCode) fail('Pass --auth-code, the EPP code from your current registrar.')
 
-    const result = await api('POST', `/domains/${encodeURIComponent(domain)}/transfer-in`, {
+    const transfer = await api('POST', `/domains/${encodeURIComponent(domain)}/transfer-in`, {
       authCode, years: args.years ? Number(args.years) : 1,
+      ...(args.country ? { countryCode: String(args.country).toUpperCase() } : {}),
     })
-    console.log(`${green('✓')} Transfer of ${bold(domain)} started via ${result.provider}`)
-    console.log(`  price   ${result.currency} ${result.price}`)
-    console.log(dim(`  ${result.message}`))
+
+    // Nothing has moved yet. A transfer-in costs money at the registrar — it
+    // includes a year's renewal — so it goes through checkout like a purchase,
+    // and saying "started" without showing the payment link would leave the
+    // customer waiting for a transfer that never begins.
+    const term = transfer.years > 1 ? ` for ${transfer.years} years` : ''
+    console.log(`${yellow('!')} Transfer of ${bold(domain)}${term} is reserved, pending payment`)
+    console.log(`  price   ${bold(`${transfer.currency} ${Number(transfer.price).toFixed(2)}`)}${
+      transfer.years > 1 ? dim(`  (${transfer.currency} ${Number(transfer.pricePerYear).toFixed(2)} × ${transfer.years})`) : ''}`)
+    if (transfer.registrarCost != null && transfer.managementFee != null) {
+      console.log(dim(`          = registrar ${Number(transfer.registrarCost).toFixed(2)} + management ${Number(transfer.managementFee).toFixed(2)} per year`))
+    }
+    const vat = vatLine({ ...transfer, grossPrice: transfer.grossPrice })
+    if (vat) console.log(vat.replace('/year total', ' total'))
+    console.log(`  pay     ${transfer.checkoutUrl}`)
+    console.log(dim(`  quote expires ${new Date(transfer.expiresAt).toLocaleTimeString()}`))
+    console.log(dim('\n  The transfer starts once payment clears, and is refunded automatically if'))
+    console.log(dim(`  ${transfer.provider || 'the registrar'} refuses it. The losing registrar then takes 5–7 days to release.`))
+    console.log(dim(`  Check progress: deployd transfer status ${domain}`))
     return
   }
 
   if (direction === 'status') {
     const result = await api('GET', `/domains/${encodeURIComponent(domain)}/transfer-in`)
     console.log(`${bold(domain)}  ${result.status}`)
+    if (result.status === 'awaiting_payment') {
+      // The reservation exists but nobody paid, so the registrar has never
+      // heard of this transfer. Saying "pending" alone would read as progress.
+      console.log(dim('  Nothing has been ordered — the checkout was never paid.'))
+      console.log(dim(`  Start again to get a fresh link: deployd transfer in ${domain} --auth-code <code>`))
+      if (result.transferId) console.log(dim(`  reservation ${result.transferId}`))
+    }
     return
   }
 
@@ -748,7 +818,7 @@ commands.pull = async args => {
   // Skip what is already here, byte for byte.
   const crypto = require('crypto')
   const wanted = files.filter(file => {
-    const local = path.join(root, file.path)
+    const local = safeLocalPath(root, file.path)
     if (!fs.existsSync(local)) return true
     if (!file.hash) return true
     const localHash = crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex')
@@ -763,6 +833,16 @@ commands.pull = async args => {
     return
   }
 
+  // A pull that dies halfway leaves a folder that LOOKS like the site but is
+  // missing files — and `push` prunes by default, so pushing it would delete
+  // those files from the live site. The marker is written before the first
+  // byte and removed only on a complete pull; push refuses to prune while it
+  // exists.
+  const marker = path.join(root, PULL_MARKER)
+  fs.writeFileSync(marker, JSON.stringify({
+    site: args.site, startedAt: new Date().toISOString(), expected: files.length,
+  }, null, 2))
+
   const BATCH = 50
   let done = 0
   for (let i = 0; i < wanted.length; i += BATCH) {
@@ -770,7 +850,12 @@ commands.pull = async args => {
     const batch = await api('POST', `/sites/${encodeURIComponent(args.site)}/files/download`, { paths: slice })
 
     for (const file of batch.files) {
-      const local = path.join(root, file.path)
+      // The server said where this file goes, and the server is not the
+      // authority on our filesystem: `DEPLOYD_HOST` is configurable, so a
+      // hostile or compromised one could answer with `../../.ssh/authorized_keys`
+      // and have us write outside --dir. Validate every path we are told to
+      // write, exactly as the upload side validates every path we send.
+      const local = safeLocalPath(root, file.path)
       fs.mkdirSync(path.dirname(local), { recursive: true })
       fs.writeFileSync(local, Buffer.from(file.content, 'base64'))
       done++
@@ -779,6 +864,8 @@ commands.pull = async args => {
   }
   if (wanted.length > 0) process.stdout.write('\n')
   else console.log(dim('  Everything was already up to date.'))
+
+  fs.rmSync(marker, { force: true })
 
   console.log(`${green('✓')} Pulled into ${root}`)
   console.log(dim(`  Edit, then: deployd push --site ${args.site} --dir ${args.dir}`))
@@ -807,6 +894,17 @@ async function uploadFolder(siteId, args) {
 
   const files = collectFiles(root)
   if (files.length === 0) fail(`Nothing to upload in ${root}`)
+
+  // An interrupted pull left this folder short of the site's files. Pruning
+  // against it would delete from the live site every file the pull never
+  // fetched — silent remote data loss from a command the user thinks is safe.
+  if (fs.existsSync(path.join(root, PULL_MARKER)) && !args['no-delete']) {
+    fail(
+      `The last pull into ${root} did not finish, so this folder may be missing files.\n` +
+      `  ${dim('Finish it:')} deployd pull --site ${siteId} --dir ${args.dir}\n` +
+      `  ${dim('Or upload anyway without deleting anything remote:')} --no-delete`
+    )
+  }
   if (!files.some(f => f === 'index.html')) {
     console.log(`${yellow('!')} No index.html at the root — the site will have no front page.`)
   }
@@ -856,9 +954,29 @@ async function uploadFolder(siteId, args) {
   console.log(`  ${version.previewUrl}`)
 }
 
+/**
+ * Resolve a server-supplied relative path inside `root`, or refuse.
+ *
+ * `path.join` happily walks out of the folder with `..`, and an absolute path
+ * ignores the root entirely. Resolving and then checking containment catches
+ * both, plus the encoded variants.
+ */
+function safeLocalPath(root, relative) {
+  const rel = String(relative || '')
+  if (!rel || rel.includes('\0')) fail(`The server sent an unusable file path: ${JSON.stringify(rel)}`)
+
+  const resolved = path.resolve(root, rel)
+  const withinRoot = resolved === root || resolved.startsWith(root + path.sep)
+  if (!withinRoot) {
+    fail(`Refusing to write outside ${root}: the server asked for "${rel}"`)
+  }
+  return resolved
+}
+
 /** Walk a folder into sorted relative paths, skipping what never belongs on a site. */
 function collectFiles(root) {
   const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg'])
+  // (the pull marker is a dotfile, and dotfiles are skipped below)
   const out = []
 
   const walk = dir => {
@@ -924,6 +1042,8 @@ commands.help = async () => {
       --owner-state Lisboa
       --owner-country PT                   two-letter ISO code
   ${bold('deployd domains status')} <purchaseId>  how a purchase is going
+  ${bold('deployd domains subscribe')} acme.com    renew it yearly, on a card
+      --cancel                             stop renewing it automatically
 
   ${bold('deployd dns')} acme.com                    list DNS records
   ${bold('deployd dns')} acme.com add A www 1.2.3.4   add a record
@@ -934,7 +1054,7 @@ commands.help = async () => {
                                            registered address (customer or
                                            agency — never a new one)
 
-  ${bold('deployd transfer in')} acme.com --auth-code X   bring a domain here
+  ${bold('deployd transfer in')} acme.com --auth-code X   bring a domain here (paid)
   ${bold('deployd transfer out')} acme.com            release it to another registrar
   ${bold('deployd transfer status')} acme.com         how an inbound transfer is going
 
