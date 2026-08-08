@@ -2,8 +2,9 @@
 
 The command line for [Deployd Studio](https://deployd.app). Create draft
 websites, check and buy domains, and manage DNS — authenticated with an API
-key from an **agency** or a **Creator Pro** account, scoped to that account's
-own sites and nothing else.
+key from any Deployd account, scoped to that account's own sites and nothing
+else. Your plan sets the draft quota (free: one draft at a time, Creator
+Pro: five, agency: 25+), never the door.
 
 ```bash
 npm install -g deployd-network-cli
@@ -16,7 +17,7 @@ deployd login
 ```
 
 opens your browser: confirm the code on screen matches your terminal and
-click **Authorize** (you need an agency or Creator Pro account). The CLI
+click **Authorize**. The CLI
 receives a **session token that lasts 24 hours and only works from the
 network that requested it** — lifted from your laptop, it is useless
 anywhere else. Session tokens carry the default scopes only.

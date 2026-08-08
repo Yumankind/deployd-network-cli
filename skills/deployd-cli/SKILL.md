@@ -1,13 +1,15 @@
 ---
 name: deployd-cli
-description: Create, list and publish Deployd Studio websites and register/manage domains from the command line, as a Deployd agency or Creator Pro account. Use when asked to create a site, upload/publish a site folder, check or buy a domain, change DNS records, or transfer a domain.
+description: Create, list and publish Deployd Studio websites and register/manage domains from the command line, with any Deployd account (agency, Creator Pro or free). Use when asked to create a site, upload/publish a site folder, check or buy a domain, change DNS records, or transfer a domain.
 ---
 
 # Deployd CLI
 
 `deployd` is the command line for Deployd Studio (https://deployd.app). It
-authenticates with an **API key** belonging to an agency or a Creator Pro
-account, and can only reach that account's own sites and domains.
+authenticates with an **API key** belonging to a Deployd account — agency,
+Creator Pro, or free — and can only reach that account's own sites and
+domains. The plan sets the draft quota (free: one draft at a time, Pro:
+five, agency: 25+), never the door.
 
 ## Install
 
@@ -95,9 +97,10 @@ deployd transfer status acme.com
    tell the user to mint a key with that scope in Settings → API keys; do not
    hunt for workarounds.
 
-5. **Draft quota.** Agencies have a draft-site allowance; `create` fails with
-   the numbers when it is spent. Extra drafts are bought in packs of 10 from
-   the dashboard.
+5. **Draft quota.** Every account has a draft-site allowance — free: one,
+   Creator Pro: five, agencies: 25 plus purchasable packs of 10. `create`
+   fails with the numbers when it is spent; publishing a draft frees its
+   slot.
 
 6. **A domain is never "claimed".** `create` takes no domain, deliberately —
    an unverified domain on a site would be a claim on a name someone else may
